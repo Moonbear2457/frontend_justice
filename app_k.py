@@ -1,7 +1,8 @@
 import openai
 import os
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session
 from dotenv import load_dotenv
+from save_conversation import save_conversation_to_file, load_conversation_from_file
 
 # Load Env variables from the .env file
 load_dotenv()
@@ -77,6 +78,8 @@ def find_similar_documents(target_vector, db, top_n):
 
 app = Flask(__name__)
 
+app.secret_key = os.getenv("SESSION_KEY")  # Set a secret key for session management, not used as of now.
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     return render_template("Boiler_k.html")
@@ -87,34 +90,55 @@ def chatbot_response():
     if not user_input:
         return jsonify("Sorry, I didn't get that.")
     
+    # Load existing conversation history from the file
+    conversation = load_conversation_from_file()
+    
+    if not conversation:
+        conversation = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a highly knowledgeable legal assistant specializing in Swiss federal, cantonal, and communal law. "
+                    "You should only provide information and answer questions related to Swiss federal, cantonal, or communal law. "
+                ),
+            }
+        ]
 
-    try:
-        # Make a call to the OpenAI API using the new interface
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a highly knowledgeable legal assistant specializing in Swiss law. "
-                        "You should only provide information and answer questions related to Swiss law. "
-                        "If a user asks about anything outside of this domain, politely decline to answer, "
-                        "stating that your expertise is limited to Swiss legal matters."
-                    ),
-                },
-                {"role": "user", "content": user_input},
-            ]
-        )
+    conversation.append({"role": "user", "content": user_input})
 
-        # Extract the assistant's reply from the response
-        gpt_response = response.choices[0].message.content
-        print(gpt_response)
+    if "test grundlagen" in user_input.lower():
+        gpt_response = {
+            "title": "Test Response",
+            "summary": "This is a test summary.",
+            "sachverhalt": "This is a test Sachverhalt.",
+            "entscheid": "This is a test Entscheid.",
+            "grundlagen": "This is a test of the Grundlagen section. It should appear on the right side.",
+            "forderung": "This is a test Forderung."
+        }
+    else:
+        try:
+            # Make a call to the OpenAI API using the conversation history
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=conversation
+            )
 
-    except Exception as e:
-        print(f"Error with OpenAI API: {e}")
-        return jsonify(f"Sorry, an error occurred: {str(e)}")
+            gpt_response = response.choices[0].message.content
+            conversation.append({"role": "assistant", "content": gpt_response})
+            save_conversation_to_file(conversation)
+        
+        except Exception as e:
+            print(f"General error: {e}")
+            return jsonify(f"Sorry, an unexpected error occurred: {str(e)}")
 
     return jsonify(gpt_response)
+
+# Optional route to clear the conversation history
+@app.route("/reset", methods=["GET"])
+def reset_conversation():
+    session.pop('conversation', None)
+    return jsonify("Conversation history cleared.")
+
 
 """     db = DBManager()
     target_vector = generate_embedding_pure(user_input)  # Generate a mock embedding vector
@@ -140,3 +164,4 @@ def chatbot_response():
 
 if __name__ == "__main__":
     app.run(debug=True)
+    
